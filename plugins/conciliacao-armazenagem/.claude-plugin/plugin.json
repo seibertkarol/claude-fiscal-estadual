@@ -1,7 +1,7 @@
 {
   "name": "conciliacao-armazenagem",
   "description": "Conciliação de armazenagem da SLC Agrícola — concilia remessas e notas de retorno de NF-e automaticamente.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Karoline Santos"
   }

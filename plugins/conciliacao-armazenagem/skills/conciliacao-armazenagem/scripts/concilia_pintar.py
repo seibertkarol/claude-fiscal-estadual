@@ -34,13 +34,34 @@ FILL_AZUL    = PatternFill('solid', fgColor='467886')   # SEM REMESSA
 FONT_BRANCO  = Font(color='FFFFFF')
 
 # ---------------------------------------------------------------
+# DETECCAO DE ESTADO: o arquivo pode ser "virgem" (primeira rodagem) ou ja
+# ter sido processado antes (tem a linha TOTAL FILTRADO e a coluna DATA DO
+# RETORNO inseridas por uma rodagem anterior nesta MESMA planilha evolutiva).
+# Isso evita duplicar linha/coluna e desalinhar tudo a cada nova rodagem.
+# ---------------------------------------------------------------
+from openpyxl import load_workbook as _peek_wb
+_wb_peek = _peek_wb(ARQUIVO, read_only=True, data_only=True)
+_ws_peek = _wb_peek['Planilha6']
+JA_PROCESSADO = (_ws_peek['A1'].value == 'TOTAL FILTRADO')
+_wb_peek.close()
+
+PANDAS_HEADER = 1 if JA_PROCESSADO else 0   # linha do cabecalho real (0-based)
+COL_OFFSET    = 1 if JA_PROCESSADO else 0   # deslocamento das colunas J em diante
+
+COL_REFERENCIA   = 6                  # nunca desloca (fica antes da coluna I)
+COL_DATA_LANC    = 10 + COL_OFFSET    # K se ja processado, J na primeira vez
+COL_VALOR        = 17 + COL_OFFSET    # S se ja processado, R na primeira vez
+
+print(f"Arquivo {'JA PROCESSADO antes' if JA_PROCESSADO else 'NOVO (primeira rodagem)'} "
+      f"— ajustando leitura automaticamente.")
+
 print("Carregando dados...")
-df_p6  = pd.read_excel(ARQUIVO, sheet_name='Planilha6', header=0)
+df_p6  = pd.read_excel(ARQUIVO, sheet_name='Planilha6', header=PANDAS_HEADER)
 df_zsd = pd.read_excel(ARQUIVO, sheet_name='zsd',       header=0)
 
-df_p6['_valor'] = pd.to_numeric(df_p6.iloc[:, 17], errors='coerce')
+df_p6['_valor'] = pd.to_numeric(df_p6.iloc[:, COL_VALOR], errors='coerce')
 
-COL_NOTA_RET = 8  # coluna I (0-based)
+COL_NOTA_RET = 8  # coluna I (0-based) — nunca desloca
 print(f"Coluna NOTA DE RETORNO (I): '{df_p6.columns[COL_NOTA_RET]}'")
 
 # ---------------------------------------------------------------
@@ -80,7 +101,7 @@ print(f"Retornos identificados via ZSD: {len(p6_retorno_by_nfe)}")
 nnf_data_lancamento = {}
 for nfe, idxs in p6_retorno_by_nfe.items():
     for idx in idxs:
-        data_lanc = df_p6.iloc[idx, 10]
+        data_lanc = df_p6.iloc[idx, COL_DATA_LANC]
         if pd.notna(data_lanc):
             nnf_data_lancamento[nfe] = data_lanc
             break
@@ -411,14 +432,19 @@ print(f"Aplicando cores em {len(pintura_p6)} linhas da Planilha6...")
 wb = load_workbook(ARQUIVO)
 ws = wb['Planilha6']
 
-# Insere uma NOVA coluna na posicao J (10), empurrando 'Documento de estorno'
-# e tudo depois (inclusive a coluna de valor, que vai de R para S) uma posicao
-# para a direita. Isso evita sobrescrever a coluna J que ja tinha dados.
-ws.insert_cols(10)
-ws.cell(row=1, column=10, value='DATA DO RETORNO')
+# Insere a coluna J (DATA DO RETORNO) SOMENTE na primeira rodagem. Se o
+# arquivo ja foi processado antes, a coluna ja existe — nao inserir de novo
+# (evita duplicar colunas a cada rodagem na mesma planilha evolutiva).
+if not JA_PROCESSADO:
+    ws.insert_cols(10)
+    ws.cell(row=1, column=10, value='DATA DO RETORNO')
+
+# O resultado final SEMPRE tem 1 linha TOTAL FILTRADO no topo (inserida agora
+# ou ja existente de antes), entao a linha excel final = pandas_idx + 3, sempre.
+EXCEL_ROW_BASE = 3
 
 for pandas_idx, (cor, nnf, criterio) in pintura_p6.items():
-    excel_row = pandas_idx + 2
+    excel_row = pandas_idx + EXCEL_ROW_BASE
     fill = FILL_MAP[cor]
     for cell in ws[excel_row]:
         cell.fill = fill
@@ -435,7 +461,7 @@ def fmt_data(d):
 
 for pandas_idx, nfs_list in nota_ret_por_rem.items():
     if pandas_idx not in pintura_p6: continue
-    excel_row = pandas_idx + 2
+    excel_row = pandas_idx + EXCEL_ROW_BASE
     valor_col_i = ', '.join(str(n) for n in sorted(set(nfs_list)))
     ws.cell(row=excel_row, column=COL_I_EXCEL, value=valor_col_i)
 
@@ -454,18 +480,25 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
         # Datas diferentes (retornos parciais em datas distintas) -> texto separado por virgula
         ws.cell(row=excel_row, column=COL_J_EXCEL, value=', '.join(fmt_data(d) for d in datas_distintas))
 
-# Linha de SUBTOTAL no topo
-# A coluna de valor era R, mas com a nova coluna J inserida ela passou para S
-ws.insert_rows(1)
+# Linha de SUBTOTAL no topo — insere SOMENTE na primeira rodagem. Se ja
+# existir (rodagem repetida na mesma planilha evolutiva), so atualiza a
+# formula/estilo da linha 1 existente, sem inserir outra linha por cima.
+if not JA_PROCESSADO:
+    ws.insert_rows(1)
 ws['A1'] = 'TOTAL FILTRADO'
-ws['S1'] = '=SUBTOTAL(9,S3:S9030)'
-ws['S1'].number_format = '#,##0.00'
+
+from openpyxl.utils import get_column_letter
+col_valor_letra = get_column_letter(COL_VALOR + 1 + (0 if JA_PROCESSADO else 1))
+ultima_linha = ws.max_row
+formula_cell = f'{col_valor_letra}1'
+ws[formula_cell] = f'=SUBTOTAL(9,{col_valor_letra}3:{col_valor_letra}{ultima_linha})'
+ws[formula_cell].number_format = '#,##0.00'
 fill_total = PatternFill('solid', fgColor='1F4E79')
 font_branco_bold = Font(bold=True, color='FFFFFF')
 for col in range(1, ws.max_column + 1):
     ws.cell(row=1, column=col).fill = fill_total
     ws.cell(row=1, column=col).font = font_branco_bold
-ws['S1'].number_format = '#,##0.00'
+ws[formula_cell].number_format = '#,##0.00'
 
 # Conta remessas/retornos por cor (precisa ser antes do save, para escrever na aba Resumo)
 cnt_rem = {'rosa': 0, 'laranja': 0, 'azul': 0}
