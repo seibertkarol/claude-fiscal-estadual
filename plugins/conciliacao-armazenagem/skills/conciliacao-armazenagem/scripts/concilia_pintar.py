@@ -31,6 +31,7 @@ if not XML_DIR:
 FILL_ROSA    = PatternFill('solid', fgColor='F2CEEF')   # ZEROU total
 FILL_LARANJA = PatternFill('solid', fgColor='E97132')   # PARCIAL
 FILL_AZUL    = PatternFill('solid', fgColor='467886')   # SEM REMESSA
+FILL_AMARELO = PatternFill('solid', fgColor='FFD700')   # DIVERGENTE: ICMS do XML != valor lancado no SAP
 FONT_BRANCO  = Font(color='FFFFFF')
 
 # ---------------------------------------------------------------
@@ -215,6 +216,7 @@ def consumir_saldo(refs_nums, val_retorno_abs, nnf_retorno):
 # ---------------------------------------------------------------
 refs_por_retorno = {}
 xml_roots = {}
+nnf_vicms_xml = {}  # nnf -> vICMS declarado no XML (para validar contra o lancado no SAP)
 for fname in sorted(os.listdir(XML_DIR)):
     if not fname.endswith('.xml'): continue
     root = ET.parse(os.path.join(XML_DIR, fname)).getroot()
@@ -229,6 +231,11 @@ for fname in sorted(os.listdir(XML_DIR)):
             except: pass
     refs_por_retorno[nnf] = refs
     xml_roots[nnf] = root
+
+    vicms_el = root.find('.//{%s}ICMSTot/{%s}vICMS' % (NS, NS))
+    if vicms_el is not None and vicms_el.text:
+        try: nnf_vicms_xml[nnf] = float(vicms_el.text)
+        except: pass
 
 # Detecta remessas compartilhadas
 retornos_por_remessa = {}
@@ -252,6 +259,7 @@ ret_rem_idxs     = {}  # nnf -> [pandas_idx das remessas consumidas]
 ret_refs_usadas  = {}  # nnf -> set de nf_nums de remessas consumidas
 nota_ret_por_rem = {}  # pandas_idx_remessa -> [nnf_retorno, ...]
 log_result = []
+relatorio_rows = []  # dados estruturados de cada retorno, para o relatorio laranja
 cnt = {'ZEROU': 0, 'PARCIAL': 0, 'SEM_REMESSA': 0, 'SEM_RAZAO': 0}
 
 for nnf in xmls_ordenados:
@@ -264,6 +272,12 @@ for nnf in xmls_ordenados:
         status_retorno[nnf] = 'SEM_RAZAO'
         cnt['SEM_RAZAO'] += 1
         log_result.append(f'[?] NF {nnf:>6} | SEM_RETORNO_P6')
+        relatorio_rows.append({
+            'nnf': nnf, 'status': 'SEM_RETORNO_P6', 'criterio': '-',
+            'n_remessas': 0, 'val_retorno': 0.0, 'val_remessas': 0.0,
+            'diferenca': 0.0, 'referencias': '',
+            'vicms_xml': nnf_vicms_xml.get(nnf), 'dif_icms': None,
+        })
         continue
 
     # C1: refNFe
@@ -305,13 +319,30 @@ for nnf in xmls_ordenados:
         else:
             status = 'PARCIAL'; cnt['PARCIAL'] += 1
 
+    # VERIFICACAO DE INTEGRIDADE: o valor de ICMS declarado no XML deve bater
+    # com o valor lancado no SAP/Planilha6 para este retorno. Se houver uma
+    # divergencia (lancamento errado, corrigido depois por uma linha de
+    # ajuste separada), NAO deixamos pintar de rosa mesmo que a soma feche —
+    # marcamos como DIVERGENTE_ICMS (cor amarela) para revisao manual.
+    TOLERANCIA_ICMS = 0.10  # ate 10 centavos de diferenca e considerado igual
+    vicms_xml = nnf_vicms_xml.get(nnf)
+    if vicms_xml is not None and abs(vicms_xml - val_ret_abs) > TOLERANCIA_ICMS:
+        status = 'DIVERGENTE_ICMS'
+        cnt.setdefault('DIVERGENTE_ICMS', 0)
+        cnt['DIVERGENTE_ICMS'] += 1
+        # Desfaz a contagem que foi feita acima antes de sabermos da divergencia
+        if not rem_idxs: cnt['SEM_REMESSA'] -= 1
+        elif abs(val_ret + val_rem) <= 0.05: cnt['ZEROU'] -= 1
+        else: cnt['PARCIAL'] -= 1
+
     status_retorno[nnf] = status
 
     # Consome saldo (e registra como consumidor, elegivel a rosa) quando:
     #   - e C1 (chave eletronica, sempre confiavel, mesmo se PARCIAL)
     #   - OU e C2/C3 (texto) MAS zerou exato — so confiamos em C2/C3 quando
     #     o valor bate 100%, para nao contaminar com falso positivo parcial
-    if rem_idxs and (criterio == 'C1:refNFe' or status == 'ZEROU'):
+    #   - E NAO tem divergencia de ICMS (lancamento suspeito nao consome saldo)
+    if rem_idxs and status != 'DIVERGENTE_ICMS' and (criterio == 'C1:refNFe' or status == 'ZEROU'):
         consumir_saldo(refs_found, val_ret_abs, nnf)
 
     # Registra quais remessas este retorno consumiu
@@ -332,6 +363,20 @@ for nnf in xmls_ordenados:
         f'| R${val_ret:,.2f} + R${val_rem:,.2f} {dif_txt}'
     )
 
+    # Guarda dados estruturados para o relatorio (usado no relatorio laranja)
+    relatorio_rows.append({
+        'nnf': nnf,
+        'status': status,
+        'criterio': criterio or '-',
+        'n_remessas': len(rem_idxs),
+        'val_retorno': val_ret,
+        'val_remessas': val_rem,
+        'diferenca': val_ret + val_rem,
+        'referencias': ', '.join(str(r) for r in sorted(refs_found)) if rem_idxs else '',
+        'vicms_xml': vicms_xml,
+        'dif_icms': (round(vicms_xml - val_ret_abs, 2) if vicms_xml is not None else None),
+    })
+
 # ---------------------------------------------------------------
 # PASSO 2+3: DETERMINA COR — ALGORITMO ITERATIVO (ponto fixo)
 #
@@ -346,15 +391,18 @@ for nnf in xmls_ordenados:
 # ---------------------------------------------------------------
 print("Passo 2/3: Algoritmo iterativo de cores (ponto fixo)...")
 
-FILL_MAP = {'rosa': FILL_ROSA, 'laranja': FILL_LARANJA, 'azul': FILL_AZUL}
+FILL_MAP = {'rosa': FILL_ROSA, 'laranja': FILL_LARANJA, 'azul': FILL_AZUL, 'amarelo': FILL_AMARELO}
 pintura_p6 = {}   # pandas_idx -> (cor, nnf, criterio)
 
 # Estado inicial de cor dos retornos (pelo status da conciliacao)
-cor_retorno = {}   # nnf -> 'rosa'|'laranja'|'azul'
+cor_retorno = {}   # nnf -> 'rosa'|'laranja'|'azul'|'amarelo'
 for nnf in xmls_ordenados:
     st = status_retorno.get(nnf)
     if st in ('SEM_RAZAO', None): continue
-    cor_retorno[nnf] = {'ZEROU':'rosa', 'PARCIAL':'laranja', 'SEM_REMESSA':'azul'}.get(st, 'laranja')
+    cor_retorno[nnf] = {
+        'ZEROU': 'rosa', 'PARCIAL': 'laranja', 'SEM_REMESSA': 'azul',
+        'DIVERGENTE_ICMS': 'amarelo',
+    }.get(st, 'laranja')
 
 # Registra retornos nas linhas de retorno da Planilha6
 for nnf in xmls_ordenados:
@@ -407,6 +455,20 @@ for iteracao in range(1, MAX_ITER + 1):
         print(f"  Ponto fixo atingido em {iteracao} iteracao(oes).")
         break
 
+# Remessas referenciadas por um retorno DIVERGENTE_ICMS tambem ficam amarelas
+# (a nao ser que ja estejam legitimamente rosa por outro consumidor real),
+# para que a usuaria veja o par inteiro (retorno + remessas) junto na revisao.
+qtd_remessas_amarelas = 0
+for nnf, cor in cor_retorno.items():
+    if cor != 'amarelo': continue
+    for idx in ret_rem_idxs.get(nnf, []):
+        if cor_remessa.get(idx) != 'rosa':
+            if cor_remessa.get(idx) != 'amarelo':
+                qtd_remessas_amarelas += 1
+            cor_remessa[idx] = 'amarelo'
+if qtd_remessas_amarelas:
+    print(f"  {qtd_remessas_amarelas} remessas marcadas em amarelo (referenciadas por retorno divergente).")
+
 # Constroi pintura_p6 final
 for nnf, cor in cor_retorno.items():
     for idx in p6_retorno_by_nfe.get(nnf, []):
@@ -432,12 +494,15 @@ print(f"Aplicando cores em {len(pintura_p6)} linhas da Planilha6...")
 wb = load_workbook(ARQUIVO)
 ws = wb['Planilha6']
 
-# Insere a coluna J (DATA DO RETORNO) SOMENTE na primeira rodagem. Se o
-# arquivo ja foi processado antes, a coluna ja existe — nao inserir de novo
-# (evita duplicar colunas a cada rodagem na mesma planilha evolutiva).
+# Insere a coluna J (DATA DO RETORNO) e a linha TOTAL FILTRADO SOMENTE na
+# primeira rodagem — e ANTES de pintar, para que os calculos de linha/coluna
+# usados na pintura ja reflitam o layout final. Se o arquivo ja foi
+# processado antes, ambos ja existem — nao inserir de novo (evita duplicar
+# linha/coluna a cada rodagem na mesma planilha evolutiva).
 if not JA_PROCESSADO:
     ws.insert_cols(10)
     ws.cell(row=1, column=10, value='DATA DO RETORNO')
+    ws.insert_rows(1)
 
 # O resultado final SEMPRE tem 1 linha TOTAL FILTRADO no topo (inserida agora
 # ou ja existente de antes), entao a linha excel final = pandas_idx + 3, sempre.
@@ -480,11 +545,8 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
         # Datas diferentes (retornos parciais em datas distintas) -> texto separado por virgula
         ws.cell(row=excel_row, column=COL_J_EXCEL, value=', '.join(fmt_data(d) for d in datas_distintas))
 
-# Linha de SUBTOTAL no topo — insere SOMENTE na primeira rodagem. Se ja
-# existir (rodagem repetida na mesma planilha evolutiva), so atualiza a
-# formula/estilo da linha 1 existente, sem inserir outra linha por cima.
-if not JA_PROCESSADO:
-    ws.insert_rows(1)
+# Linha de SUBTOTAL no topo (a linha em si ja foi inserida mais acima,
+# antes da pintura — aqui so escrevemos a formula e o estilo)
 ws['A1'] = 'TOTAL FILTRADO'
 
 from openpyxl.utils import get_column_letter
@@ -501,8 +563,8 @@ for col in range(1, ws.max_column + 1):
 ws[formula_cell].number_format = '#,##0.00'
 
 # Conta remessas/retornos por cor (precisa ser antes do save, para escrever na aba Resumo)
-cnt_rem = {'rosa': 0, 'laranja': 0, 'azul': 0}
-cnt_ret = {'rosa': 0, 'laranja': 0, 'azul': 0}
+cnt_rem = {'rosa': 0, 'laranja': 0, 'azul': 0, 'amarelo': 0}
+cnt_ret = {'rosa': 0, 'laranja': 0, 'azul': 0, 'amarelo': 0}
 for pandas_idx, (cor, nnf, _) in pintura_p6.items():
     val = df_p6.at[pandas_idx, '_valor']
     if pd.notna(val):
@@ -511,6 +573,7 @@ for pandas_idx, (cor, nnf, _) in pintura_p6.items():
 
 # Soma monetaria por cor (mesma logica do diagnostico mais abaixo)
 soma_rosa_rem = soma_rosa_ret = soma_laranja_rem = soma_laranja_ret = 0.0
+soma_amarelo_rem = soma_amarelo_ret = 0.0
 for pandas_idx, (cor, nnf, _) in pintura_p6.items():
     val = df_p6.at[pandas_idx, '_valor']
     if pd.isna(val): continue
@@ -520,6 +583,9 @@ for pandas_idx, (cor, nnf, _) in pintura_p6.items():
     elif cor == 'laranja':
         if val > 0: soma_laranja_rem += val
         else:       soma_laranja_ret += val
+    elif cor == 'amarelo':
+        if val > 0: soma_amarelo_rem += val
+        else:       soma_amarelo_ret += val
 
 # ---------------------------------------------------------------
 # ABA "RESUMO" — contagem desta rodagem (igual ao VBA antigo)
@@ -534,6 +600,7 @@ font_header = Font(bold=True, color='FFFFFF', size=12)
 fill_rosa   = PatternFill('solid', fgColor='F2CEEF')
 fill_laranja= PatternFill('solid', fgColor='E97132')
 fill_azul   = PatternFill('solid', fgColor='467886')
+fill_amarelo= PatternFill('solid', fgColor='FFD700')
 
 linhas_resumo = [
     ('RESUMO DA CONCILIAÇÃO', '', None),
@@ -542,15 +609,18 @@ linhas_resumo = [
     ('Categoria', 'Qtde. linhas', None),
     ('Remessas ROSA (100% zerado)', cnt_rem['rosa'], fill_rosa),
     ('Remessas LARANJA (parcial/incompleto)', cnt_rem['laranja'], fill_laranja),
+    ('Remessas AMARELO (retorno c/ ICMS divergente)', cnt_rem['amarelo'], fill_amarelo),
     ('Retornos ROSA (ZEROU)', cnt_ret['rosa'], fill_rosa),
     ('Retornos LARANJA (PARCIAL)', cnt_ret['laranja'], fill_laranja),
     ('Retornos AZUL (sem remessa)', cnt_ret['azul'], fill_azul),
+    ('Retornos AMARELO (ICMS do XML != lançado no SAP)', cnt_ret['amarelo'], fill_amarelo),
     ('', '', None),
     ('TOTAL DE LINHAS PINTADAS', len(pintura_p6), None),
     ('', '', None),
     ('Diagnóstico monetário', '', None),
     ('Saldo líquido ROSA (deve ser ~R$0)', round(soma_rosa_rem + soma_rosa_ret, 2), None),
     ('Saldo líquido LARANJA (em aberto)', round(soma_laranja_rem + soma_laranja_ret, 2), None),
+    ('Saldo líquido AMARELO (revisar lançamento)', round(soma_amarelo_rem + soma_amarelo_ret, 2), None),
 ]
 
 for i, (label, valor, fill) in enumerate(linhas_resumo, start=1):
@@ -570,6 +640,66 @@ for i, (label, valor, fill) in enumerate(linhas_resumo, start=1):
 
 ws_resumo.column_dimensions['A'].width = 42
 ws_resumo.column_dimensions['B'].width = 16
+
+# ---------------------------------------------------------------
+# ABA "RELATORIO LARANJA" — lista so os casos que precisam de revisao
+# (PARCIAL, SEM_REMESSA, SEM_RETORNO_P6), ordenados pela diferenca
+# em modulo (do maior problema para o menor) — facilita revisar depois.
+# ---------------------------------------------------------------
+NOME_ABA_LARANJA = 'Relatorio Laranja'
+if NOME_ABA_LARANJA in wb.sheetnames:
+    del wb[NOME_ABA_LARANJA]
+ws_laranja = wb.create_sheet(NOME_ABA_LARANJA, 1)  # logo depois do Resumo
+
+casos_revisao = [r for r in relatorio_rows if r['status'] != 'ZEROU']
+casos_revisao.sort(key=lambda r: abs(r['diferenca']), reverse=True)
+
+cabecalho_laranja = [
+    'NF Retorno', 'Status', 'Critério', 'Qtde. Remessas',
+    'Valor Retorno', 'Valor Remessas Encontradas', 'Diferença',
+    'vICMS no XML', 'Diferença ICMS (XML - lançado)',
+    'Remessas Referenciadas',
+]
+for col, titulo in enumerate(cabecalho_laranja, start=1):
+    c = ws_laranja.cell(row=1, column=col, value=titulo)
+    c.font = font_header
+    c.fill = fill_header
+
+fill_atencao  = PatternFill('solid', fgColor='FFCCCC')   # diferenca grande generica
+fill_div_icms = PatternFill('solid', fgColor='FFD700')   # divergencia de ICMS especificamente
+
+for i, r in enumerate(casos_revisao, start=2):
+    ws_laranja.cell(row=i, column=1, value=r['nnf'])
+    ws_laranja.cell(row=i, column=2, value=r['status'])
+    ws_laranja.cell(row=i, column=3, value=r['criterio'])
+    ws_laranja.cell(row=i, column=4, value=r['n_remessas'])
+    c5 = ws_laranja.cell(row=i, column=5, value=round(r['val_retorno'], 2))
+    c6 = ws_laranja.cell(row=i, column=6, value=round(r['val_remessas'], 2))
+    c7 = ws_laranja.cell(row=i, column=7, value=round(r['diferenca'], 2))
+    c8 = ws_laranja.cell(row=i, column=8, value=round(r['vicms_xml'], 2) if r['vicms_xml'] is not None else None)
+    c9 = ws_laranja.cell(row=i, column=9, value=r['dif_icms'])
+    for c in (c5, c6, c7, c8, c9):
+        c.number_format = '#,##0.00'
+    ws_laranja.cell(row=i, column=10, value=r['referencias'])
+
+    # Destaca: amarelo para divergencia de ICMS (o caso mais critico),
+    # vermelho claro para outras diferencas grandes (> R$1.000)
+    if r['status'] == 'DIVERGENTE_ICMS':
+        fill_linha = fill_div_icms
+    elif abs(r['diferenca']) > 1000:
+        fill_linha = fill_atencao
+    else:
+        fill_linha = None
+    if fill_linha:
+        for col in range(1, 11):
+            ws_laranja.cell(row=i, column=col).fill = fill_linha
+
+for col, largura in zip('ABCDEFGHIJ', [12, 18, 22, 14, 16, 22, 16, 16, 22, 40]):
+    ws_laranja.column_dimensions[col].width = largura
+ws_laranja.freeze_panes = 'A2'
+
+print(f"Aba '{NOME_ABA_LARANJA}' criada com {len(casos_revisao)} casos para revisao "
+      f"(ordenados por diferenca, maiores primeiro).")
 
 # Gera nome de saida automaticamente, sem sobrescrever rodagens anteriores
 # e sem travar se uma versao anterior estiver aberta no Excel
@@ -598,14 +728,16 @@ for linha in log_result:
 
 print()
 print('RESUMO DOS RETORNOS (status da conciliacao):')
-print(f'  Zerou   (rosa):      {cnt["ZEROU"]}')
-print(f'  Parcial (laranja):   {cnt["PARCIAL"]}')
-print(f'  Sem remessa (azul):  {cnt["SEM_REMESSA"]}')
-print(f'  Sem retorno P6:      {cnt["SEM_RAZAO"]}')
+print(f'  Zerou   (rosa):              {cnt["ZEROU"]}')
+print(f'  Parcial (laranja):           {cnt["PARCIAL"]}')
+print(f'  Sem remessa (azul):          {cnt["SEM_REMESSA"]}')
+print(f'  Divergente ICMS (amarelo):   {cnt.get("DIVERGENTE_ICMS", 0)}  <-- XML != valor lancado no SAP')
+print(f'  Sem retorno P6:              {cnt["SEM_RAZAO"]}')
 print()
 print('RESUMO DAS REMESSAS PINTADAS:')
 print(f'  Rosa    (100% zerado por retornos ZEROU): {cnt_rem["rosa"]}')
 print(f'  Laranja (parcial ou retorno incompleto):  {cnt_rem["laranja"]}')
+print(f'  Amarelo (retorno c/ ICMS divergente):     {cnt_rem["amarelo"]}')
 print()
 print(f'  Total linhas pintadas: {len(pintura_p6)}')
 print()
@@ -613,7 +745,8 @@ print('Regra aplicada:')
 print('  REMESSA fica ROSA apenas se:')
 print('    1. Todo seu valor foi consumido (saldo = 0)')
 print('    2. TODOS os retornos que a referenciam sao ZEROU')
-print('  Caso contrario: LARANJA')
+print('    3. O ICMS do XML do(s) retorno(s) bate com o valor lancado no SAP')
+print('  Caso contrario: LARANJA (incompleto) ou AMARELO (ICMS divergente, revisar lancamento)')
 print()
 print('Filtrar pela cor ROSA na Planilha6 deve resultar em soma = 0.')
 print()
@@ -628,7 +761,11 @@ print(f'  LARANJA remessas:            R$ {soma_laranja_rem:>15,.2f}')
 print(f'  LARANJA retornos:            R$ {soma_laranja_ret:>15,.2f}')
 print(f'  LARANJA saldo liquido:       R$ {(soma_laranja_rem + soma_laranja_ret):>15,.2f}')
 print()
-saldo_total = soma_rosa_rem + soma_rosa_ret + soma_laranja_rem + soma_laranja_ret
+print(f'  AMARELO remessas:            R$ {soma_amarelo_rem:>15,.2f}')
+print(f'  AMARELO retornos:            R$ {soma_amarelo_ret:>15,.2f}')
+print(f'  AMARELO saldo liquido:       R$ {(soma_amarelo_rem + soma_amarelo_ret):>15,.2f}  <-- revisar lancamento')
+print()
+saldo_total = soma_rosa_rem + soma_rosa_ret + soma_laranja_rem + soma_laranja_ret + soma_amarelo_rem + soma_amarelo_ret
 print(f'  TOTAL pintado (rem+ret):     R$ {saldo_total:>15,.2f}')
 if abs(soma_rosa_rem + soma_rosa_ret) < 1.0:
     print('  [OK] Rosa balanceado — filtro rosa soma ~R$0')

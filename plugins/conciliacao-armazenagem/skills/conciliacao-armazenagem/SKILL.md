@@ -20,8 +20,14 @@ completamente devolvido via **notas de retorno** (NF-e). O resultado é pintado 
 Planilha6 do Excel principal:
 
 - **ROSA** — par (ou grupo) completamente zerado: remessa + retorno(s) somam R$0
+  E o ICMS do XML bate com o valor lançado no SAP (ver verificação de ICMS abaixo)
 - **LARANJA** — parcial ou incompleto: algum valor ainda está em aberto
 - **AZUL** — retorno sem remessa correspondente na planilha
+- **AMARELO** — o retorno e suas remessas até fechariam matematicamente, mas o
+  **ICMS declarado no XML não bate com o valor lançado no SAP** (erro de
+  lançamento, geralmente corrigido depois por uma linha de ajuste separada).
+  Nunca pinta de rosa, mesmo que a soma com o ajuste feche — precisa de revisão
+  manual.
 
 A garantia matemática: filtrar a Planilha6 pela cor ROSA deve resultar em soma = R$0.
 
@@ -32,9 +38,27 @@ Além da cor, o script preenche duas colunas auxiliares em toda linha pintada
 - **Coluna J — DATA DO RETORNO** (inserida pelo script, empurra as colunas
   originais uma posição para a direita): data de lançamento da nota de retorno
 
-E uma aba nova é criada/recriada a cada rodagem: **"Resumo Conciliacao"**, com a
-contagem de linhas rosa/laranja/azul (remessas e retornos separados) e o
-diagnóstico monetário — igual ao que o VBA antigo fazia.
+E duas abas novas são criadas/recriadas a cada rodagem:
+- **"Resumo Conciliacao"**: contagem de linhas rosa/laranja/azul/amarelo
+  (remessas e retornos separados) e o diagnóstico monetário — igual ao que o
+  VBA antigo fazia.
+- **"Relatorio Laranja"**: lista TODOS os casos que não são rosa (laranja,
+  azul, amarelo, sem retorno no SAP), ordenados pela diferença monetária (do
+  maior problema para o menor), com colunas extras `vICMS no XML` e
+  `Diferença ICMS` para facilitar a revisão manual. Linhas amarelas fortes =
+  divergência de ICMS; vermelho claro = outras diferenças grandes (>R$1.000).
+
+### Verificação de integridade do ICMS
+
+Antes de pintar rosa, o script compara o `vICMS` declarado no XML de cada
+retorno com o valor lançado no SAP/Planilha6 para aquele retorno (tolerância:
+**até R$0,10 de diferença é considerado igual**, por causa de arredondamento).
+Se divergir além disso, o retorno (e as remessas que ele referencia) NUNCA
+ficam rosa — ficam amarelos, mesmo que a soma com uma linha de ajuste feche
+matematicamente. Isso existe porque já aconteceram casos de notas de retorno
+lançadas no SAP com o valor errado, corrigidas depois por um ajuste manual —
+e sem essa verificação, o script pintaria de rosa como se nada tivesse
+acontecido, escondendo o erro de lançamento original.
 
 ## Funciona para qualquer fazenda
 
