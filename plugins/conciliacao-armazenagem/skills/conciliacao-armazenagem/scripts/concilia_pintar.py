@@ -35,30 +35,73 @@ FILL_AMARELO = PatternFill('solid', fgColor='FFD700')   # DIVERGENTE: ICMS do XM
 FONT_BRANCO  = Font(color='FFFFFF')
 
 # ---------------------------------------------------------------
-# DETECCAO DE ESTADO: o arquivo pode ser "virgem" (primeira rodagem) ou ja
-# ter sido processado antes (tem a linha TOTAL FILTRADO e a coluna DATA DO
-# RETORNO inseridas por uma rodagem anterior nesta MESMA planilha evolutiva).
-# Isso evita duplicar linha/coluna e desalinhar tudo a cada nova rodagem.
+# DETECCAO DE ESTADO: a linha 1 da Planilha6 e SEMPRE a linha de total
+# (formula na coluna de valor), igual em todas as planilhas da usuaria —
+# isso NAO e algo que so meu script cria, e o padrao dela. O que varia e:
+#   1. Se a coluna J (DATA DO RETORNO) ja foi inserida numa rodagem anterior
+#   2. Se a linha de total ja tem o texto "TOTAL FILTRADO" (escrito por mim)
+# Detectamos cada coisa separadamente, olhando o conteudo real das celulas,
+# em vez de depender de um texto exato que pode nao estar la.
 # ---------------------------------------------------------------
 from openpyxl import load_workbook as _peek_wb
 _wb_peek = _peek_wb(ARQUIVO, read_only=True, data_only=True)
-_ws_peek = _wb_peek['Planilha6']
-JA_PROCESSADO = (_ws_peek['A1'].value == 'TOTAL FILTRADO')
+
+def _resolver_aba(nome_esperado):
+    """Acha o nome real da aba ignorando maiusculas/minusculas
+    (ex: planilha pode ter 'ZSD' ou 'zsd')."""
+    for nome in _wb_peek.sheetnames:
+        if nome.strip().lower() == nome_esperado.lower():
+            return nome
+    raise ValueError(
+        f"Aba '{nome_esperado}' nao encontrada. Abas disponiveis: {_wb_peek.sheetnames}"
+    )
+
+ABA_PLANILHA6 = _resolver_aba('Planilha6')
+ABA_ZSD       = _resolver_aba('zsd')
+
+_ws_peek = _wb_peek[ABA_PLANILHA6]
+
+# A coluna G (Referencia) tem texto em toda linha de dados. Se a linha 2
+# tiver esse texto e a linha 1 nao, a linha 1 e a linha de total/cabecalho
+# vazio — ou seja, o cabeçalho de verdade esta na linha 2.
+_val_linha1_G = _ws_peek.cell(row=1, column=7).value
+_val_linha2_G = _ws_peek.cell(row=2, column=7).value
+LINHA1_E_TOTAL = (
+    (_val_linha1_G in (None, '')) and isinstance(_val_linha2_G, str) and _val_linha2_G.strip() != ''
+)
+
+# A coluna J (10) ja foi inserida (DATA DO RETORNO) numa rodagem anterior?
+_linha_cabecalho_1based = 2 if LINHA1_E_TOTAL else 1
+_val_col_j = _ws_peek.cell(row=_linha_cabecalho_1based, column=10).value
+# Aceita variacoes de texto ("DATA DO RETORNO", "DATA DE RETORNO", etc) —
+# o importante e que a celula comece com "DATA" e contenha "RETORNO", ja
+# que diferentes planilhas/usuarias podem ter digitado isso de forma levemente
+# diferente.
+COLUNA_J_JA_EXISTE = (
+    isinstance(_val_col_j, str)
+    and 'DATA' in _val_col_j.strip().upper()
+    and 'RETORNO' in _val_col_j.strip().upper()
+)
+
 _wb_peek.close()
 
-PANDAS_HEADER = 1 if JA_PROCESSADO else 0   # linha do cabecalho real (0-based)
-COL_OFFSET    = 1 if JA_PROCESSADO else 0   # deslocamento das colunas J em diante
+PANDAS_HEADER = 1 if LINHA1_E_TOTAL else 0   # linha do cabecalho real (0-based)
+COL_OFFSET    = 1 if COLUNA_J_JA_EXISTE else 0   # deslocamento das colunas J em diante
+
+# Mantem o nome JA_PROCESSADO para o restante do script (controla insercoes)
+JA_PROCESSADO_LINHA = LINHA1_E_TOTAL
+JA_PROCESSADO_COLUNA = COLUNA_J_JA_EXISTE
 
 COL_REFERENCIA   = 6                  # nunca desloca (fica antes da coluna I)
 COL_DATA_LANC    = 10 + COL_OFFSET    # K se ja processado, J na primeira vez
 COL_VALOR        = 17 + COL_OFFSET    # S se ja processado, R na primeira vez
 
-print(f"Arquivo {'JA PROCESSADO antes' if JA_PROCESSADO else 'NOVO (primeira rodagem)'} "
-      f"— ajustando leitura automaticamente.")
+print(f"Linha 1 {'JA E a linha de total' if LINHA1_E_TOTAL else 'NAO existe ainda (sera criada)'} | "
+      f"Coluna DATA DO RETORNO {'JA EXISTE' if COLUNA_J_JA_EXISTE else 'NAO existe ainda (sera criada)'}.")
 
 print("Carregando dados...")
-df_p6  = pd.read_excel(ARQUIVO, sheet_name='Planilha6', header=PANDAS_HEADER)
-df_zsd = pd.read_excel(ARQUIVO, sheet_name='zsd',       header=0)
+df_p6  = pd.read_excel(ARQUIVO, sheet_name=ABA_PLANILHA6, header=PANDAS_HEADER)
+df_zsd = pd.read_excel(ARQUIVO, sheet_name=ABA_ZSD,       header=0)
 
 df_p6['_valor'] = pd.to_numeric(df_p6.iloc[:, COL_VALOR], errors='coerce')
 
@@ -175,6 +218,18 @@ def extrair_nums_texto(txt):
             pos = i2 + len(pref)
     return nums
 
+def _ordenar_refs_para_alocacao(refs_nums):
+    """
+    Processa remessas EXCLUSIVAS primeiro, e as COMPARTILHADAS (referenciadas
+    por mais de um retorno) por ultimo. Isso evita que um retorno monopolize
+    o saldo inteiro de uma remessa compartilhada so porque foi processado
+    primeiro (por ordem de NF) — ele so consome da remessa compartilhada o
+    que sobrar depois de cobrir tudo que puder com remessas exclusivas,
+    deixando o restante correto disponivel para o outro retorno que tambem
+    precisa dela.
+    """
+    return sorted(refs_nums, key=lambda n: 1 if n in compartilhadas else 0)
+
 def buscar_remessas(refs_nums, val_retorno_abs):
     """
     Busca remessas com saldo disponivel.
@@ -183,7 +238,7 @@ def buscar_remessas(refs_nums, val_retorno_abs):
     """
     idxs, soma, vistos, refs_found = [], 0.0, set(), set()
     restante = val_retorno_abs
-    for n in refs_nums:
+    for n in _ordenar_refs_para_alocacao(refs_nums):
         saldo = saldo_remessa.get(n, 0.0)
         if saldo <= 0: continue
         for idx in p6_remessa_by_num.get(n, []):
@@ -199,7 +254,10 @@ def buscar_remessas(refs_nums, val_retorno_abs):
     return idxs, soma, refs_found
 
 def consumir_saldo(refs_nums, val_retorno_abs, nnf_retorno):
-    """Desconta o saldo e registra quem consumiu cada remessa."""
+    """Desconta o saldo e registra quem consumiu cada remessa.
+    Usa a mesma ordem (exclusivas primeiro) que buscar_remessas, para o
+    valor efetivamente descontado ficar consistente com o que foi casado."""
+    refs_nums = _ordenar_refs_para_alocacao(refs_nums)
     restante = val_retorno_abs
     for n in refs_nums:
         saldo = saldo_remessa.get(n, 0.0)
@@ -492,16 +550,19 @@ for idx, cor in cor_remessa.items():
 print(f"Aplicando cores em {len(pintura_p6)} linhas da Planilha6...")
 
 wb = load_workbook(ARQUIVO)
-ws = wb['Planilha6']
+ws = wb[ABA_PLANILHA6]
 
-# Insere a coluna J (DATA DO RETORNO) e a linha TOTAL FILTRADO SOMENTE na
-# primeira rodagem — e ANTES de pintar, para que os calculos de linha/coluna
-# usados na pintura ja reflitam o layout final. Se o arquivo ja foi
-# processado antes, ambos ja existem — nao inserir de novo (evita duplicar
-# linha/coluna a cada rodagem na mesma planilha evolutiva).
-if not JA_PROCESSADO:
+# Insere a coluna J (DATA DO RETORNO) e a linha de total SOMENTE se ainda
+# nao existirem — e ANTES de pintar, para que os calculos de linha/coluna
+# usados na pintura ja reflitam o layout final. As duas coisas sao
+# verificadas de forma INDEPENDENTE (a planilha pode ja ter uma linha de
+# total no padrao da usuaria sem ainda ter a coluna J, por exemplo).
+if not JA_PROCESSADO_COLUNA:
     ws.insert_cols(10)
-    ws.cell(row=1, column=10, value='DATA DO RETORNO')
+    _header_row_atual = 2 if JA_PROCESSADO_LINHA else 1
+    ws.cell(row=_header_row_atual, column=10, value='DATA DO RETORNO')
+
+if not JA_PROCESSADO_LINHA:
     ws.insert_rows(1)
 
 # O resultado final SEMPRE tem 1 linha TOTAL FILTRADO no topo (inserida agora
@@ -550,7 +611,7 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
 ws['A1'] = 'TOTAL FILTRADO'
 
 from openpyxl.utils import get_column_letter
-col_valor_letra = get_column_letter(COL_VALOR + 1 + (0 if JA_PROCESSADO else 1))
+col_valor_letra = get_column_letter(COL_VALOR + 1 + (0 if JA_PROCESSADO_COLUNA else 1))
 ultima_linha = ws.max_row
 formula_cell = f'{col_valor_letra}1'
 ws[formula_cell] = f'=SUBTOTAL(9,{col_valor_letra}3:{col_valor_letra}{ultima_linha})'
