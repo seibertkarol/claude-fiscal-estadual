@@ -114,8 +114,8 @@ df_zsd = pd.read_excel(ARQUIVO, sheet_name=ABA_ZSD,       header=0)
 
 df_p6['_valor'] = pd.to_numeric(df_p6.iloc[:, COL_VALOR], errors='coerce')
 
-COL_NOTA_RET = 8  # coluna I (0-based) — nunca desloca
-print(f"Coluna NOTA DE RETORNO (I): '{df_p6.columns[COL_NOTA_RET]}'")
+COL_NOTA_RET = 24 if USANDO_RAZAO else 8  # col Y no razao, col I no padrao
+print(f"Coluna NOTA DE RETORNO: '{df_p6.columns[COL_NOTA_RET]}'")
 
 # ---------------------------------------------------------------
 # MAPA 1: ZSD doc_sap -> nfe
