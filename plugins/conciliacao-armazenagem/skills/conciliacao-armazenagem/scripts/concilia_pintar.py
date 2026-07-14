@@ -56,7 +56,10 @@ def _resolver_aba(nome_esperado):
         f"Aba '{nome_esperado}' nao encontrada. Abas disponiveis: {_wb_peek.sheetnames}"
     )
 
-ABA_PLANILHA6 = _resolver_aba('Planilha6')
+try:
+    ABA_PLANILHA6 = _resolver_aba('Planilha6')
+except ValueError:
+    ABA_PLANILHA6 = _resolver_aba('razao')
 ABA_ZSD       = _resolver_aba('zsd')
 
 _ws_peek = _wb_peek[ABA_PLANILHA6]
