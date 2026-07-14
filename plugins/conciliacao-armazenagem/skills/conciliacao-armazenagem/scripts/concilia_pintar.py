@@ -122,9 +122,18 @@ print(f"Coluna NOTA DE RETORNO: '{df_p6.columns[COL_NOTA_RET]}'")
 # ---------------------------------------------------------------
 zsd_by_doc = {}
 for _, row in df_zsd.iterrows():
-    doc = str(int(row.iloc[4])) if pd.notna(row.iloc[4]) else None
+    if USANDO_RAZAO:
+        # ZSD fiscal: col C (idx 2) = DOC SAP, col P (idx 15) = NF numero
+        try:    doc = str(int(float(str(row.iloc[2]))))
+        except: doc = None
+        nfe_val = row.iloc[15]
+    else:
+        # ZSD contábil: col E (idx 4) = DOC SAP, col AY (idx 50) = NF
+        try:    doc = str(int(row.iloc[4])) if pd.notna(row.iloc[4]) else None
+        except: doc = None
+        nfe_val = row.iloc[50]
     if doc and doc not in zsd_by_doc:
-        zsd_by_doc[doc] = {'nfe': row.iloc[50]}
+        zsd_by_doc[doc] = {'nfe': nfe_val}
 
 # ---------------------------------------------------------------
 # MAPA 2: P6 retorno nfe -> indices + valor
