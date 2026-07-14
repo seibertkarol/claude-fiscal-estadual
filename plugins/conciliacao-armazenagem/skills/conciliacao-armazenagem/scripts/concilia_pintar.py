@@ -95,9 +95,15 @@ COL_OFFSET    = 1 if COLUNA_J_JA_EXISTE else 0   # deslocamento das colunas J em
 JA_PROCESSADO_LINHA = LINHA1_E_TOTAL
 JA_PROCESSADO_COLUNA = COLUNA_J_JA_EXISTE
 
+USANDO_RAZAO = ABA_PLANILHA6.strip().lower() == 'razao'
+
 COL_REFERENCIA   = 6                  # nunca desloca (fica antes da coluna I)
-COL_DATA_LANC    = 10 + COL_OFFSET    # K se ja processado, J na primeira vez
-COL_VALOR        = 17 + COL_OFFSET    # S se ja processado, R na primeira vez
+if USANDO_RAZAO:
+    COL_DATA_LANC = 9    # col J no razao (Data de lancamento)
+    COL_VALOR     = 15   # col P no razao
+else:
+    COL_DATA_LANC = 10 + COL_OFFSET
+    COL_VALOR     = 17 + COL_OFFSET
 
 print(f"Linha 1 {'JA E a linha de total' if LINHA1_E_TOTAL else 'NAO existe ainda (sera criada)'} | "
       f"Coluna DATA DO RETORNO {'JA EXISTE' if COLUNA_J_JA_EXISTE else 'NAO existe ainda (sera criada)'}.")
