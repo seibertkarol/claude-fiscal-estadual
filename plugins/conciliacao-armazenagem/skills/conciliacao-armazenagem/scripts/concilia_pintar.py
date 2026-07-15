@@ -638,7 +638,14 @@ def fmt_data(d):
 for pandas_idx, nfs_list in nota_ret_por_rem.items():
     if pandas_idx not in pintura_p6: continue
     excel_row = pandas_idx + EXCEL_ROW_BASE
-    valor_col_i = ', '.join(str(n) for n in sorted(set(nfs_list)))
+    # Se a NF for duplicada no ZSD, usa DOC SAP para evitar ambiguidade no filtro
+    ids_col_i = []
+    for n in sorted(set(nfs_list)):
+        if n in nfe_duplicadas and n in nnf_doc_sap:
+            ids_col_i.append(nnf_doc_sap[n])
+        else:
+            ids_col_i.append(str(n))
+    valor_col_i = ', '.join(ids_col_i)
     ws.cell(row=excel_row, column=COL_I_EXCEL, value=valor_col_i)
 
     # Coluna J (DATA DO RETORNO): data de lancamento da(s) nota(s) de retorno
