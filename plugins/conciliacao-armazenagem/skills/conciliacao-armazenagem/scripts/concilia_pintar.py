@@ -174,6 +174,7 @@ def ref_to_str(v):
 
 p6_retorno_by_nfe = {}
 p6_retorno_valor  = {}
+nnf_doc_sap = {}  # nfe -> doc_sap (para usar na coluna I quando NF for duplicada)
 for idx, row in df_p6.iterrows():
     val = row['_valor']
     if pd.isna(val) or val >= 0: continue
@@ -185,6 +186,7 @@ for idx, row in df_p6.iterrows():
     except: continue
     p6_retorno_by_nfe.setdefault(nfe, []).append(idx)
     p6_retorno_valor[nfe] = p6_retorno_valor.get(nfe, 0.0) + float(val)
+    nnf_doc_sap[nfe] = ref  # guarda o DOC SAP original
 
 print(f"Retornos identificados via ZSD: {len(p6_retorno_by_nfe)}")
 
