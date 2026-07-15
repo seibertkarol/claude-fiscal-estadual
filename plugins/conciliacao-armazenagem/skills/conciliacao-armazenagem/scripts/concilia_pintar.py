@@ -322,18 +322,32 @@ def consumir_saldo(refs_nums, val_retorno_abs, nnf_retorno):
         restante -= usado
         if restante <= 0: break
 
+# Mapa ZSD: chave44 -> doc_sap (para identificar qual DOC SAP pertence a cada XML)
+zsd_chave_to_doc_sap = {}
+if _zsd_col_chave is not None:
+    for _, row in df_zsd.iterrows():
+        chave = str(row.iloc[_zsd_col_chave]).strip()
+        try: doc = str(int(float(str(row.iloc[_zsd_col_doc]))))
+        except: doc = None
+        if doc and len(chave) == 44:
+            zsd_chave_to_doc_sap[chave] = doc
+
 # ---------------------------------------------------------------
 # PRE-PROCESSAMENTO: le todos os XMLs
 # ---------------------------------------------------------------
 refs_por_retorno = {}
 xml_roots = {}
 nnf_vicms_xml = {}  # nnf -> vICMS declarado no XML (para validar contra o lancado no SAP)
+xml_chave_to_nnf = {}  # chave44 -> nnf (para saber qual chave pertence a qual NF)
 for fname in sorted(os.listdir(XML_DIR)):
     if not fname.endswith('.xml'): continue
     root = ET.parse(os.path.join(XML_DIR, fname)).getroot()
     nnf_el = root.find('.//{%s}nNF' % NS)
     if nnf_el is None: continue
     nnf = int(nnf_el.text)
+    chave44_xml = fname[:44]  # chave do próprio XML (retorno)
+    if len(chave44_xml) == 44:
+        xml_chave_to_nnf[chave44_xml] = nnf
     refs = set()
     for el in root.findall('.//{%s}refNFe' % NS):
         chave = (el.text or '').strip()
@@ -347,6 +361,24 @@ for fname in sorted(os.listdir(XML_DIR)):
     if vicms_el is not None and vicms_el.text:
         try: nnf_vicms_xml[nnf] = float(vicms_el.text)
         except: pass
+
+# Para NFs duplicadas: mapa remessa_nf -> {doc_sap_retorno que a referencia via XML}
+# Processamos cada XML individualmente para saber qual DOC SAP referenciou qual remessa
+remessa_nf_to_doc_sap_retorno = {}  # remessa_nf -> doc_sap do retorno que a referenciou
+for chave44_xml, nnf in xml_chave_to_nnf.items():
+    if nnf not in nfe_duplicadas: continue
+    doc_sap_ret = zsd_chave_to_doc_sap.get(chave44_xml)
+    if not doc_sap_ret: continue
+    root = xml_roots.get(nnf)
+    if root is None: continue
+    # C1: refNFe
+    for el in root.findall('.//{%s}refNFe' % NS):
+        chave = (el.text or '').strip()
+        if len(chave) == 44:
+            try:
+                nf_rem = int(chave[25:34])
+                remessa_nf_to_doc_sap_retorno.setdefault(nf_rem, set()).add(doc_sap_ret)
+            except: pass
 
 # Detecta remessas compartilhadas
 retornos_por_remessa = {}
