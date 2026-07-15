@@ -123,18 +123,33 @@ print(f"Coluna NOTA DE RETORNO: '{df_p6.columns[COL_NOTA_RET]}'")
 # ---------------------------------------------------------------
 # MAPA 1: ZSD doc_sap -> nfe
 # ---------------------------------------------------------------
+
+# Detecta colunas do ZSD pelo nome (robusto para diferentes layouts de exportação)
+def _achar_col(df, *candidatos):
+    """Retorna o índice da primeira coluna cujo nome contenha um dos candidatos."""
+    for cand in candidatos:
+        for i, col in enumerate(df.columns):
+            if cand.lower() in str(col).lower():
+                return i
+    return None
+
+_zsd_col_doc = _achar_col(df_zsd, 'n° documento', 'nº documento', 'n� documento', 'numero documento')
+_zsd_col_nfe = _achar_col(df_zsd, 'nota fiscal eletr', 'número de nota fiscal', 'nfe', 'n° nf', 'nº nf')
+_zsd_col_chave = _achar_col(df_zsd, 'chave acesso', 'chave 44')
+
+# Fallbacks por índice conforme layout conhecido
+if _zsd_col_doc is None:
+    _zsd_col_doc = 2 if USANDO_RAZAO else 4
+if _zsd_col_nfe is None:
+    _zsd_col_nfe = 15 if USANDO_RAZAO else 50
+
+print(f"ZSD mapeado: DOC SAP=col{_zsd_col_doc} | NF=col{_zsd_col_nfe} | Chave=col{_zsd_col_chave}")
+
 zsd_by_doc = {}
 for _, row in df_zsd.iterrows():
-    if USANDO_RAZAO:
-        # ZSD fiscal: col C (idx 2) = DOC SAP, col P (idx 15) = NF numero
-        try:    doc = str(int(float(str(row.iloc[2]))))
-        except: doc = None
-        nfe_val = row.iloc[15]
-    else:
-        # ZSD contábil: col E (idx 4) = DOC SAP, col AY (idx 50) = NF
-        try:    doc = str(int(row.iloc[4])) if pd.notna(row.iloc[4]) else None
-        except: doc = None
-        nfe_val = row.iloc[50]
+    try:    doc = str(int(float(str(row.iloc[_zsd_col_doc]))))
+    except: doc = None
+    nfe_val = row.iloc[_zsd_col_nfe]
     if doc and doc not in zsd_by_doc:
         zsd_by_doc[doc] = {'nfe': nfe_val}
 
