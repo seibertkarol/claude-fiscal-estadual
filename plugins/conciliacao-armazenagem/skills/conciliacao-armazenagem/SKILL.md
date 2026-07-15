@@ -20,7 +20,7 @@ A skill funciona com qualquer fazenda que siga o mesmo layout de colunas, exigin
 ## Fluxo de Execução
 
 **1. Identificar inputs:** pergunte qual arquivo Excel e qual pasta de XMLs usar (NUNCA assuma automaticamente)
-**2. Limpar XMLs:** execute `limpar_xmls.py` conforme regras (cancelamentos, operações não realizadas, etc.)
+**2. Limpar XMLs:** execute `limpar_xmls.py` — SEMPRE executar sem pedir confirmação, mesmo quando houver notas canceladas (110111/210240). A limpeza é obrigatória antes de qualquer conciliação.
 **3. Rodar conciliação:** execute `concilia_pintar.py` com os parâmetros `--arquivo=` e `--pasta=`
 **4. Validar resultado:** consulte o resumo monetário e as abas "Resumo Conciliacao" e "Relatorio Laranja"
 **5. Informar arquivo gerado** à usuária
