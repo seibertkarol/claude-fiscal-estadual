@@ -641,11 +641,18 @@ def fmt_data(d):
 for pandas_idx, nfs_list in nota_ret_por_rem.items():
     if pandas_idx not in pintura_p6: continue
     excel_row = pandas_idx + EXCEL_ROW_BASE
-    # Se a NF for duplicada no ZSD, usa DOC SAP para evitar ambiguidade no filtro
+    val_linha = df_p6.at[pandas_idx, '_valor']
+    eh_retorno = pd.notna(val_linha) and val_linha < 0
+
     ids_col_i = []
     for n in sorted(set(nfs_list)):
-        if n in nfe_duplicadas and n in nnf_doc_sap:
-            ids_col_i.append(nnf_doc_sap[n])
+        if n in nfe_duplicadas:
+            if eh_retorno:
+                # Linha de retorno: usa o próprio doc_sap da linha
+                ids_col_i.append(retorno_idx_doc_sap.get(pandas_idx, str(n)))
+            else:
+                # Linha de remessa: mostra todos os doc_saps que têm essa NF
+                ids_col_i.extend(nfe_to_doc_saps.get(n, [str(n)]))
         else:
             ids_col_i.append(str(n))
     valor_col_i = ', '.join(ids_col_i)
