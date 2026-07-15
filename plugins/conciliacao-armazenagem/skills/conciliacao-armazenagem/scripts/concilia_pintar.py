@@ -59,7 +59,10 @@ def _resolver_aba(nome_esperado):
 try:
     ABA_PLANILHA6 = _resolver_aba('Planilha6')
 except ValueError:
-    ABA_PLANILHA6 = _resolver_aba('razao')
+    try:
+        ABA_PLANILHA6 = _resolver_aba('razao')
+    except ValueError:
+        ABA_PLANILHA6 = _resolver_aba('PE02C')
 ABA_ZSD       = _resolver_aba('zsd')
 
 _ws_peek = _wb_peek[ABA_PLANILHA6]
