@@ -151,7 +151,19 @@ for _, row in df_zsd.iterrows():
     except: doc = None
     nfe_val = row.iloc[_zsd_col_nfe]
     if doc and doc not in zsd_by_doc:
-        zsd_by_doc[doc] = {'nfe': nfe_val}
+        zsd_by_doc[doc] = {'nfe': nfe_val, 'doc': doc}
+
+# Mapa inverso: NF -> lista de DOC SAPs (para detectar NFs duplicadas)
+nfe_para_docs = {}
+for doc, info in zsd_by_doc.items():
+    try:    nfe = int(info['nfe'])
+    except: continue
+    nfe_para_docs.setdefault(nfe, []).append(doc)
+
+# NFs que aparecem em mais de um DOC SAP — serão identificadas pelo DOC SAP na coluna I
+nfe_duplicadas = {nfe for nfe, docs in nfe_para_docs.items() if len(docs) > 1}
+if nfe_duplicadas:
+    print(f"NFs duplicadas no ZSD (serão preenchidas com DOC SAP): {sorted(nfe_duplicadas)}")
 
 # ---------------------------------------------------------------
 # MAPA 2: P6 retorno nfe -> indices + valor
