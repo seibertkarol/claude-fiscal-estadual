@@ -374,27 +374,32 @@ for fname in sorted(os.listdir(XML_DIR)):
         try: nnf_vicms_xml[nnf] = float(vicms_el.text)
         except: pass
 
-# NFs que aparecem em mais de um XML na pasta (duplicadas na prática)
-nfe_duplicadas_xml = {nnf for nnf, chaves in nnf_to_chaves.items() if len(chaves) > 1}
-if nfe_duplicadas_xml:
-    print(f"NFs com múltiplos XMLs na pasta: {sorted(nfe_duplicadas_xml)}")
+# Para cada retorno que tem NF duplicada no ZSD:
+# percorre seu XML (pela chave44 do ZSD) e mapeia remessa_nf -> doc_sap
+# Assim sabemos exatamente qual DOC SAP referenciou qual remessa
+remessa_nf_para_doc_sap = {}  # remessa_nf -> doc_sap do retorno que a referenciou via C1
 
-# Para cada XML de NF duplicada: mapeia remessa_nf -> doc_sap específico que a referenciou
-# Chave: (remessa_nf, doc_sap_retorno) — para saber qual retorno referenciou qual remessa
-remessa_nf_para_doc_sap = {}   # remessa_nf -> doc_sap do retorno que a referenciou via C1
-for nnf in nfe_duplicadas_xml:
-    for chave44 in nnf_to_chaves[nnf]:
-        doc_sap_ret = zsd_chave_to_doc_sap.get(chave44)
-        if not doc_sap_ret: continue
-        root = xml_roots_by_chave[chave44]
-        for el in root.findall('.//{%s}refNFe' % NS):
-            chave_ref = (el.text or '').strip()
-            if len(chave_ref) == 44:
-                try:
-                    nf_rem = int(chave_ref[25:34])
-                    # Cada remessa aponta para UM doc_sap específico
-                    remessa_nf_para_doc_sap[nf_rem] = doc_sap_ret
-                except: pass
+for _, row in df_zsd.iterrows():
+    try:    doc = str(int(float(str(row.iloc[_zsd_col_doc]))))
+    except: continue
+    try:    nfe = int(float(str(row.iloc[_zsd_col_nfe])))
+    except: continue
+    if nfe not in nfe_duplicadas: continue  # só processa NFs duplicadas
+    chave44 = str(row.iloc[_zsd_col_chave]).strip() if _zsd_col_chave is not None else ''
+    if len(chave44) != 44: continue
+    root = xml_roots_by_chave.get(chave44)
+    if root is None: continue
+    # C1: extrai remessas referenciadas por este XML específico
+    for el in root.findall('.//{%s}refNFe' % NS):
+        chave_ref = (el.text or '').strip()
+        if len(chave_ref) == 44:
+            try:
+                nf_rem = int(chave_ref[25:34])
+                remessa_nf_para_doc_sap[nf_rem] = doc  # doc_sap deste retorno
+            except: pass
+
+if remessa_nf_para_doc_sap:
+    print(f"Remessas com DOC SAP específico mapeado: {len(remessa_nf_para_doc_sap)}")
 
 # Detecta remessas compartilhadas
 retornos_por_remessa = {}
