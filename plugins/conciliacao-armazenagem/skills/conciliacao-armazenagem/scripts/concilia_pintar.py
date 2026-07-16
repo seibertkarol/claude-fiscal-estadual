@@ -694,18 +694,18 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
 
     ids_col_i = []
     for n in sorted(set(nfs_list)):
-        if n in nfe_duplicadas:
+        if n in nfe_duplicadas_xml:
             if eh_retorno:
-                # Linha de retorno: usa o próprio doc_sap desta linha específica
+                # Linha de retorno: usa o DOC SAP da própria linha (col G)
                 ids_col_i.append(retorno_idx_doc_sap.get(pandas_idx, str(n)))
             else:
-                # Linha de remessa: usa o doc_sap do XML que a referenciou via C1
+                # Linha de remessa: usa o DOC SAP do XML que a referenciou via C1
                 nf_rem = extrair_num(str(df_p6.iloc[pandas_idx, COL_REFERENCIA]))
-                docs_que_referenciam = remessa_nf_to_doc_sap_retorno.get(nf_rem, set())
-                if docs_que_referenciam:
-                    ids_col_i.extend(sorted(docs_que_referenciam))
+                doc_sap_especifico = remessa_nf_para_doc_sap.get(nf_rem)
+                if doc_sap_especifico:
+                    ids_col_i.append(doc_sap_especifico)
                 else:
-                    ids_col_i.extend(nfe_to_doc_saps.get(n, [str(n)]))
+                    ids_col_i.append(str(n))
         else:
             ids_col_i.append(str(n))
     valor_col_i = ', '.join(ids_col_i)
