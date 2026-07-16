@@ -704,9 +704,9 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
                 # Linha de retorno: usa o DOC SAP da própria linha (col G)
                 ids_col_i.append(retorno_idx_doc_sap.get(pandas_idx, str(n)))
             else:
-                # Linha de remessa: usa o DOC SAP do XML que a referenciou via C1
-                nf_rem = extrair_num(str(df_p6.iloc[pandas_idx, COL_REFERENCIA]))
-                doc_sap_especifico = remessa_nf_para_doc_sap.get(nf_rem)
+                # Linha de remessa (NF n): usa o DOC SAP que a referenciou via C1
+                # A NF já está em 'n', procura quem referenciou essa NF específica
+                doc_sap_especifico = remessa_nf_para_doc_sap.get(n)
                 if doc_sap_especifico:
                     ids_col_i.append(doc_sap_especifico)
                 else:
