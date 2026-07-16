@@ -334,51 +334,67 @@ if _zsd_col_chave is not None:
 
 # ---------------------------------------------------------------
 # PRE-PROCESSAMENTO: le todos os XMLs
+# Guarda por chave44 (sempre único) E por nnf (pode sobrescrever em NFs duplicadas)
 # ---------------------------------------------------------------
 refs_por_retorno = {}
 xml_roots = {}
-nnf_vicms_xml = {}  # nnf -> vICMS declarado no XML (para validar contra o lancado no SAP)
-xml_chave_to_nnf = {}  # chave44 -> nnf (para saber qual chave pertence a qual NF)
+xml_roots_by_chave = {}   # chave44 -> root (nunca sobrescreve)
+xml_chave_to_nnf  = {}    # chave44 -> nnf
+nnf_to_chaves     = {}    # nnf -> [chave44, ...] (lista de XMLs com esse NF)
+nnf_vicms_xml     = {}
+
 for fname in sorted(os.listdir(XML_DIR)):
     if not fname.endswith('.xml'): continue
-    root = ET.parse(os.path.join(XML_DIR, fname)).getroot()
+    try: root = ET.parse(os.path.join(XML_DIR, fname)).getroot()
+    except: continue
     nnf_el = root.find('.//{%s}nNF' % NS)
     if nnf_el is None: continue
     nnf = int(nnf_el.text)
-    chave44_xml = fname[:44]  # chave do próprio XML (retorno)
-    if len(chave44_xml) == 44:
-        xml_chave_to_nnf[chave44_xml] = nnf
-    refs = set()
-    for el in root.findall('.//{%s}refNFe' % NS):
-        chave = (el.text or '').strip()
-        if len(chave) == 44:
-            try: refs.add(int(chave[25:34]))
-            except: pass
-    refs_por_retorno[nnf] = refs
-    xml_roots[nnf] = root
+    chave44 = fname[:44]
+
+    # Sempre guarda por chave (único)
+    if len(chave44) == 44:
+        xml_roots_by_chave[chave44] = root
+        xml_chave_to_nnf[chave44]   = nnf
+        nnf_to_chaves.setdefault(nnf, []).append(chave44)
+
+    # Por NF: usa o primeiro encontrado (o algoritmo principal usa este)
+    if nnf not in xml_roots:
+        refs = set()
+        for el in root.findall('.//{%s}refNFe' % NS):
+            chave = (el.text or '').strip()
+            if len(chave) == 44:
+                try: refs.add(int(chave[25:34]))
+                except: pass
+        refs_por_retorno[nnf] = refs
+        xml_roots[nnf] = root
 
     vicms_el = root.find('.//{%s}ICMSTot/{%s}vICMS' % (NS, NS))
     if vicms_el is not None and vicms_el.text:
         try: nnf_vicms_xml[nnf] = float(vicms_el.text)
         except: pass
 
-# Para NFs duplicadas: mapa remessa_nf -> {doc_sap_retorno que a referencia via XML}
-# Processamos cada XML individualmente para saber qual DOC SAP referenciou qual remessa
-remessa_nf_to_doc_sap_retorno = {}  # remessa_nf -> doc_sap do retorno que a referenciou
-for chave44_xml, nnf in xml_chave_to_nnf.items():
-    if nnf not in nfe_duplicadas: continue
-    doc_sap_ret = zsd_chave_to_doc_sap.get(chave44_xml)
-    if not doc_sap_ret: continue
-    root = xml_roots.get(nnf)
-    if root is None: continue
-    # C1: refNFe
-    for el in root.findall('.//{%s}refNFe' % NS):
-        chave = (el.text or '').strip()
-        if len(chave) == 44:
-            try:
-                nf_rem = int(chave[25:34])
-                remessa_nf_to_doc_sap_retorno.setdefault(nf_rem, set()).add(doc_sap_ret)
-            except: pass
+# NFs que aparecem em mais de um XML na pasta (duplicadas na prática)
+nfe_duplicadas_xml = {nnf for nnf, chaves in nnf_to_chaves.items() if len(chaves) > 1}
+if nfe_duplicadas_xml:
+    print(f"NFs com múltiplos XMLs na pasta: {sorted(nfe_duplicadas_xml)}")
+
+# Para cada XML de NF duplicada: mapeia remessa_nf -> doc_sap específico que a referenciou
+# Chave: (remessa_nf, doc_sap_retorno) — para saber qual retorno referenciou qual remessa
+remessa_nf_para_doc_sap = {}   # remessa_nf -> doc_sap do retorno que a referenciou via C1
+for nnf in nfe_duplicadas_xml:
+    for chave44 in nnf_to_chaves[nnf]:
+        doc_sap_ret = zsd_chave_to_doc_sap.get(chave44)
+        if not doc_sap_ret: continue
+        root = xml_roots_by_chave[chave44]
+        for el in root.findall('.//{%s}refNFe' % NS):
+            chave_ref = (el.text or '').strip()
+            if len(chave_ref) == 44:
+                try:
+                    nf_rem = int(chave_ref[25:34])
+                    # Cada remessa aponta para UM doc_sap específico
+                    remessa_nf_para_doc_sap[nf_rem] = doc_sap_ret
+                except: pass
 
 # Detecta remessas compartilhadas
 retornos_por_remessa = {}
