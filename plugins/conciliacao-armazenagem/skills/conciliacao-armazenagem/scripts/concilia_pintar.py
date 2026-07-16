@@ -699,7 +699,7 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
 
     ids_col_i = []
     for n in sorted(set(nfs_list)):
-        if n in nfe_duplicadas_xml:
+        if n in nfe_duplicadas:
             if eh_retorno:
                 # Linha de retorno: usa o DOC SAP da própria linha (col G)
                 ids_col_i.append(retorno_idx_doc_sap.get(pandas_idx, str(n)))
