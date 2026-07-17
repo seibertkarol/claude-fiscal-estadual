@@ -377,36 +377,26 @@ for fname in sorted(os.listdir(XML_DIR)):
 # Para cada retorno que tem NF duplicada no ZSD:
 # percorre seu XML (pela chave44 do ZSD) e mapeia remessa_nf -> doc_sap
 # Assim sabemos exatamente qual DOC SAP referenciou qual remessa
-remessa_nf_para_doc_sap = {}  # remessa_nf -> doc_sap do retorno que a referenciou
+remessa_nf_para_doc_sap = {}  # remessa_nf -> doc_sap do retorno que a referenciou via C1
 
 for _, row in df_zsd.iterrows():
     try:    doc = str(int(float(str(row.iloc[_zsd_col_doc]))))
     except: continue
     try:    nfe = int(float(str(row.iloc[_zsd_col_nfe])))
     except: continue
-    if nfe not in nfe_duplicadas: continue
+    if nfe not in nfe_duplicadas: continue  # só processa NFs duplicadas
     chave44 = str(row.iloc[_zsd_col_chave]).strip() if _zsd_col_chave is not None else ''
     if len(chave44) != 44: continue
     root = xml_roots_by_chave.get(chave44)
     if root is None: continue
-    refs_este_xml = set()
-    # C1: refNFe
+    # C1: extrai remessas referenciadas por este XML específico
     for el in root.findall('.//{%s}refNFe' % NS):
         chave_ref = (el.text or '').strip()
         if len(chave_ref) == 44:
-            try: refs_este_xml.add(int(chave_ref[25:34]))
+            try:
+                nf_rem = int(chave_ref[25:34])
+                remessa_nf_para_doc_sap[nf_rem] = doc  # doc_sap deste retorno
             except: pass
-    # C2: infAdProd + xPed
-    for tag in ['infAdProd', 'xPed']:
-        for el in root.findall('.//{%s}%s' % (NS, tag)):
-            refs_este_xml |= extrair_nums_texto(el.text or '')
-    # C3: infCpl + xTexto
-    for tag in ['infCpl', 'xTexto']:
-        for el in root.findall('.//{%s}%s' % (NS, tag)):
-            refs_este_xml |= extrair_nums_texto(el.text or '')
-    for nf_rem in refs_este_xml:
-        if nf_rem not in remessa_nf_para_doc_sap:
-            remessa_nf_para_doc_sap[nf_rem] = doc
 
 if remessa_nf_para_doc_sap:
     print(f"Remessas com DOC SAP específico mapeado: {len(remessa_nf_para_doc_sap)}")
@@ -462,6 +452,7 @@ for nnf in xmls_ordenados:
     if refs_c1:
         rem_idxs, val_rem, refs_found = buscar_remessas(refs_c1, val_ret_abs)
         if rem_idxs: criterio = 'C1:refNFe'
+
     # C2: infAdProd + xPed
     if not rem_idxs:
         refs_c2 = set()
@@ -549,95 +540,6 @@ for nnf in xmls_ordenados:
         'vicms_xml': vicms_xml,
         'dif_icms': (round(vicms_xml - val_ret_abs, 2) if vicms_xml is not None else None),
     })
-
-# ---------------------------------------------------------------
-# PASSO 1b: RECUPERACAO DE NFs DUPLICADAS
-# Para NFs com mais de um DOC SAP, o passo 1 so processou o primeiro XML.
-# Aqui processamos os XMLs restantes por doc_sap individual.
-# ---------------------------------------------------------------
-print("\nPasso 1b: Processando XMLs adicionais de NFs duplicadas...")
-_dup_recovered = 0
-
-for nfe_dup in sorted(nfe_duplicadas):
-    docs_desta_nf = nfe_para_docs.get(nfe_dup, [])
-    if len(docs_desta_nf) < 2: continue
-    chaves_desta_nf = nnf_to_chaves.get(nfe_dup, [])
-
-    for chave44 in chaves_desta_nf:
-        doc_sap = zsd_chave_to_doc_sap.get(chave44)
-        if not doc_sap: continue
-        root = xml_roots_by_chave.get(chave44)
-        if not root: continue
-
-        # Retornos desta NF que pertencem a ESTE doc_sap
-        ret_idxs_doc = [i for i in p6_retorno_by_nfe.get(nfe_dup, [])
-                        if retorno_idx_doc_sap.get(i) == doc_sap]
-        if not ret_idxs_doc: continue
-        val_ret_doc = sum(float(df_p6.at[i, '_valor']) for i in ret_idxs_doc
-                         if pd.notna(df_p6.at[i, '_valor']))
-        val_ret_abs_doc = abs(val_ret_doc)
-
-        # Extrai refs deste XML especifico (C1/C2/C3)
-        refs_xml = set()
-        for el in root.findall('.//{%s}refNFe' % NS):
-            chave_ref = (el.text or '').strip()
-            if len(chave_ref) == 44:
-                try: refs_xml.add(int(chave_ref[25:34]))
-                except: pass
-        for tag in ['infAdProd', 'xPed']:
-            for el in root.findall('.//{%s}%s' % (NS, tag)):
-                refs_xml |= extrair_nums_texto(el.text or '')
-        for tag in ['infCpl', 'xTexto']:
-            for el in root.findall('.//{%s}%s' % (NS, tag)):
-                refs_xml |= extrair_nums_texto(el.text or '')
-
-        if not refs_xml: continue
-
-        # Busca remessas que ainda nao foram vinculadas a esta NF
-        rem_idxs_doc, val_rem_doc, refs_found_doc = buscar_remessas(refs_xml, val_ret_abs_doc)
-
-        # Filtra remessas que JA estao em ret_rem_idxs[nfe_dup] (ja processadas no passo 1)
-        ja_processadas = set(ret_rem_idxs.get(nfe_dup, []))
-        novos_rem = [i for i in rem_idxs_doc if i not in ja_processadas]
-        if not novos_rem: continue
-
-        # Registra as novas remessas
-        ret_rem_idxs.setdefault(nfe_dup, []).extend(novos_rem)
-        for ref_n in refs_found_doc:
-            ret_refs_usadas.setdefault(nfe_dup, set()).add(ref_n)
-
-        # Calcula status deste doc_sap especifico
-        val_rem_novos = sum(float(df_p6.at[i, '_valor']) for i in novos_rem
-                           if pd.notna(df_p6.at[i, '_valor']) and df_p6.at[i, '_valor'] > 0)
-        dif_doc = val_ret_doc + val_rem_novos
-        if abs(dif_doc) <= 0.05:
-            status_doc = 'ZEROU'
-        else:
-            status_doc = 'PARCIAL'
-
-        # Verifica ICMS
-        vicms_el = root.find('.//{%s}ICMSTot/{%s}vICMS' % (NS, NS))
-        vicms_val = None
-        if vicms_el is not None and vicms_el.text:
-            try: vicms_val = float(vicms_el.text)
-            except: pass
-        if vicms_val is not None and abs(vicms_val - val_ret_abs_doc) > 0.10:
-            status_doc = 'DIVERGENTE_ICMS'
-
-        # Consome saldo
-        if status_doc != 'DIVERGENTE_ICMS':
-            consumir_saldo(refs_found_doc, val_ret_abs_doc, nfe_dup)
-
-        # Vincula remessas -> retornos em nota_ret_por_rem
-        for idx in novos_rem:
-            nota_ret_por_rem.setdefault(idx, [])
-            if nfe_dup not in nota_ret_por_rem[idx]:
-                nota_ret_por_rem[idx].append(nfe_dup)
-
-        _dup_recovered += len(novos_rem)
-        print(f"  NF {nfe_dup} doc={doc_sap}: +{len(novos_rem)} remessas ({', '.join(str(extrair_num(str(df_p6.iloc[i, 6]))) for i in novos_rem[:5])}...)")
-
-print(f"  Total remessas recuperadas: {_dup_recovered}")
 
 # ---------------------------------------------------------------
 # PASSO 2+3: DETERMINA COR — ALGORITMO ITERATIVO (ponto fixo)
@@ -742,6 +644,12 @@ for idx, cor in cor_remessa.items():
     ref = retornos_que_usaram[0] if retornos_que_usaram else 0
     pintura_p6[idx] = (cor, ref, '')
 
+for idx, cor in cor_remessa.items():
+    nfs_list = nota_ret_por_rem.get(idx, [])
+    retornos_que_usaram = [n for n in nfs_list if n in ret_rem_idxs and idx in ret_rem_idxs[n]]
+    ref = retornos_que_usaram[0] if retornos_que_usaram else 0
+    pintura_p6[idx] = (cor, ref, '')
+
 # ---------------------------------------------------------------
 # APLICA PINTURA NA PLANILHA6
 # ---------------------------------------------------------------
@@ -796,10 +704,11 @@ for pandas_idx, nfs_list in nota_ret_por_rem.items():
                 # Linha de retorno: usa o DOC SAP da própria linha (col G)
                 ids_col_i.append(retorno_idx_doc_sap.get(pandas_idx, str(n)))
             else:
-                nf_num_remessa = extrair_num(str(df_p6.iloc[pandas_idx, 6]))
-                doc_found = remessa_nf_para_doc_sap.get(nf_num_remessa)
-                if doc_found:
-                    ids_col_i.append(doc_found)
+                # Linha de remessa (NF n): usa o DOC SAP que a referenciou via C1
+                # A NF já está em 'n', procura quem referenciou essa NF específica
+                doc_sap_especifico = remessa_nf_para_doc_sap.get(n)
+                if doc_sap_especifico:
+                    ids_col_i.append(doc_sap_especifico)
                 else:
                     ids_col_i.append(str(n))
         else:
